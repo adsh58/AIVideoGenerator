@@ -42,7 +42,8 @@ def compose_video(
     bg_image = _generate_background(background_prompt, W, H)
     bg_path = output_path.replace(".mp4", "_bg.jpg")
     bg_image.save(bg_path, quality=95)
-    bg_clip = ImageClip(bg_path, duration=duration)
+    _bg = ImageClip(bg_path)
+    bg_clip = _bg.with_duration(duration) if hasattr(_bg, 'with_duration') else _bg.set_duration(duration)
 
     # 2. Position face video
     if video_type in ("short", "reel"):
@@ -61,15 +62,11 @@ def compose_video(
     if face_clip.audio:
         final = final.with_audio(face_clip.audio) if hasattr(final, 'with_audio') else final.set_audio(face_clip.audio)
 
-    final.write_videofile(
-        output_path,
-        fps=FPS,
-        codec="libx264",
-        audio_codec="aac",
-        preset="fast",
-        threads=4,
-        logger=None,
-    )
+    write_kwargs = dict(fps=FPS, codec="libx264", audio_codec="aac", threads=4, logger=None)
+    import inspect
+    if "preset" in inspect.signature(final.write_videofile).parameters:
+        write_kwargs["preset"] = "fast"
+    final.write_videofile(output_path, **write_kwargs)
 
     # Cleanup temp bg
     if os.path.exists(bg_path):
@@ -157,12 +154,19 @@ def _compat(clip, **kwargs):
     return clip
 
 
+def _resize(clip, new_size):
+    """moviepy 1.x: .resize(), moviepy 2.x: .resized()."""
+    if hasattr(clip, 'resized'):
+        return clip.resized(new_size)
+    return clip.resize(new_size)
+
+
 def _fit_face_vertical(clip: VideoFileClip, W: int, H: int) -> VideoFileClip:
     """Position face for vertical (9:16) video — centered, upper 70%."""
     face_h = int(H * 0.72)
     scale = face_h / clip.h
     new_w = int(clip.w * scale)
-    clip = clip.resize((new_w, face_h))
+    clip = _resize(clip, (new_w, face_h))
     x = (W - new_w) // 2
     y = int(H * 0.02)
     return _compat(clip, position=(x, y))
@@ -173,7 +177,7 @@ def _fit_face_horizontal(clip: VideoFileClip, W: int, H: int) -> VideoFileClip:
     face_h = int(H * 0.85)
     scale = face_h / clip.h
     new_w = int(clip.w * scale)
-    clip = clip.resize((new_w, face_h))
+    clip = _resize(clip, (new_w, face_h))
     x = int(W * 0.05)
     y = (H - face_h) // 2
     return _compat(clip, position=(x, y))

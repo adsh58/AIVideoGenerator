@@ -105,11 +105,9 @@ def _static_photo_video(photo_path: str, audio_path: str, output_dir: str) -> st
     clip = clip.with_audio(audio) if hasattr(clip, 'with_audio') else clip.set_audio(audio)
 
     output_path = os.path.join(output_dir, "face_animated.mp4")
-    clip.write_videofile(
-        output_path,
-        fps=24,
-        codec="libx264",
-        audio_codec="aac",
-        logger=None,
-    )
+    import inspect
+    write_kwargs = dict(fps=24, codec="libx264", audio_codec="aac", logger=None)
+    if "preset" in inspect.signature(clip.write_videofile).parameters:
+        write_kwargs["preset"] = "fast"
+    clip.write_videofile(output_path, **write_kwargs)
     return output_path
