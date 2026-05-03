@@ -71,8 +71,10 @@ def _static_photo_video(photo_path: str, audio_path: str, output_dir: str) -> st
     Fallback: create a video from the static photo + audio.
     Adds a subtle zoom/pan (Ken Burns effect) to make it look dynamic.
     """
-    from moviepy.editor import ImageClip, AudioFileClip, concatenate_videoclips
-    from moviepy.video.fx.all import resize
+    try:
+        from moviepy.editor import ImageClip, AudioFileClip, VideoClip
+    except ImportError:
+        from moviepy import ImageClip, AudioFileClip, VideoClip
     import numpy as np
     from PIL import Image
 
@@ -99,9 +101,8 @@ def _static_photo_video(photo_path: str, audio_path: str, output_dir: str) -> st
         cropped = pil.crop((left, top, left + target_w, top + target_h))
         return np.array(cropped)
 
-    from moviepy.editor import VideoClip
     clip = VideoClip(make_frame, duration=duration)
-    clip = clip.set_audio(audio)
+    clip = clip.with_audio(audio) if hasattr(clip, 'with_audio') else clip.set_audio(audio)
 
     output_path = os.path.join(output_dir, "face_animated.mp4")
     clip.write_videofile(

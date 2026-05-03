@@ -2,11 +2,17 @@ import os
 import re
 import numpy as np
 from PIL import Image, ImageDraw, ImageFont, ImageFilter
-from moviepy.editor import (
-    VideoFileClip, ImageClip, AudioFileClip,
-    CompositeVideoClip, TextClip, ColorClip,
-)
-from moviepy.video.fx.all import resize, crop
+
+try:
+    from moviepy.editor import (
+        VideoFileClip, ImageClip, AudioFileClip,
+        CompositeVideoClip, TextClip, ColorClip,
+    )
+except ImportError:
+    from moviepy import (
+        VideoFileClip, ImageClip, AudioFileClip,
+        CompositeVideoClip, TextClip, ColorClip,
+    )
 
 # Video format specs
 FORMAT_SPECS = {
@@ -52,7 +58,8 @@ def compose_video(
 
     # 4. Compose and export
     final = CompositeVideoClip(clips, size=(W, H))
-    final = final.set_audio(face_clip.audio)
+    if face_clip.audio:
+        final = final.with_audio(face_clip.audio) if hasattr(final, 'with_audio') else final.set_audio(face_clip.audio)
 
     final.write_videofile(
         output_path,
@@ -142,6 +149,14 @@ def _add_bokeh(img: Image.Image, colors: list) -> Image.Image:
     return img.convert("RGB")
 
 
+def _compat(clip, **kwargs):
+    """Works with both moviepy 1.x (set_X) and 2.x (with_X)."""
+    for k, v in kwargs.items():
+        fn = f"with_{k}" if hasattr(clip, f"with_{k}") else f"set_{k}"
+        clip = getattr(clip, fn)(v)
+    return clip
+
+
 def _fit_face_vertical(clip: VideoFileClip, W: int, H: int) -> VideoFileClip:
     """Position face for vertical (9:16) video — centered, upper 70%."""
     face_h = int(H * 0.72)
@@ -150,7 +165,7 @@ def _fit_face_vertical(clip: VideoFileClip, W: int, H: int) -> VideoFileClip:
     clip = clip.resize((new_w, face_h))
     x = (W - new_w) // 2
     y = int(H * 0.02)
-    return clip.set_position((x, y))
+    return _compat(clip, position=(x, y))
 
 
 def _fit_face_horizontal(clip: VideoFileClip, W: int, H: int) -> VideoFileClip:
@@ -161,7 +176,7 @@ def _fit_face_horizontal(clip: VideoFileClip, W: int, H: int) -> VideoFileClip:
     clip = clip.resize((new_w, face_h))
     x = int(W * 0.05)
     y = (H - face_h) // 2
-    return clip.set_position((x, y))
+    return _compat(clip, position=(x, y))
 
 
 def _make_caption_clips(script: str, duration: float, W: int, H: int, video_type: str) -> list:
@@ -186,21 +201,17 @@ def _make_caption_clips(script: str, duration: float, W: int, H: int, video_type
         chunk_dur = end - start
 
         try:
-            txt_clip = (
-                TextClip(
-                    text,
-                    fontsize=font_size,
-                    color="white",
-                    stroke_color="black",
-                    stroke_width=2,
-                    method="caption",
-                    size=(int(W * 0.9), None),
-                    font="Arial-Bold",
-                )
-                .set_start(start)
-                .set_duration(chunk_dur)
-                .set_position(("center", y_pos))
+            txt_clip = TextClip(
+                text,
+                fontsize=font_size,
+                color="white",
+                stroke_color="black",
+                stroke_width=2,
+                method="caption",
+                size=(int(W * 0.9), None),
+                font="Arial-Bold",
             )
+            txt_clip = _compat(txt_clip, start=start, duration=chunk_dur, position=("center", y_pos))
             clips.append(txt_clip)
         except Exception as e:
             print(f"[Caption] Skipping caption chunk {i}: {e}")
