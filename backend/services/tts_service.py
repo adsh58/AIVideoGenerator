@@ -60,14 +60,24 @@ def generate_speech(script: str, voice_sample_path: str, output_path: str) -> st
 
 
 def _convert_to_wav(mp3_path: str, wav_path: str):
-    """Convert audio to wav using pydub/ffmpeg."""
+    """Convert audio to wav using bundled ffmpeg from imageio_ffmpeg."""
     try:
+        import imageio_ffmpeg
+        import subprocess
+        ffmpeg_exe = imageio_ffmpeg.get_ffmpeg_exe()
+        result = subprocess.run(
+            [ffmpeg_exe, "-y", "-i", mp3_path, wav_path],
+            capture_output=True, timeout=60
+        )
+        if result.returncode == 0 and os.path.exists(wav_path):
+            return
+        # fallback to pydub with explicit ffmpeg
         from pydub import AudioSegment
+        AudioSegment.converter = ffmpeg_exe
         audio = AudioSegment.from_file(mp3_path)
         audio.export(wav_path, format="wav")
     except Exception as e:
-        print(f"[TTS] Audio conversion warning: {e}")
-        # If conversion fails, just copy the mp3 as-is
+        print(f"[TTS] Audio conversion warning: {e} — using mp3 as-is")
         import shutil
         shutil.copy2(mp3_path, wav_path)
 
