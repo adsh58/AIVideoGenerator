@@ -1,13 +1,15 @@
 """
-Face animator — FFmpeg zoompan filter.
-Renders a Ken Burns (gentle zoom) effect over the audio duration.
-Completes in ~2-6s regardless of video length.
+Face animator — tiered approach:
+1. SadTalker (GPU only — very slow on CPU, skipped without CUDA)
+2. MediaPipe talking-head: mouth movement from audio energy (~10-30s, any length)
+3. Ken Burns zoompan: static zoom fallback (~2-6s)
 """
 import os
 import subprocess
 import sys
 
 import imageio_ffmpeg
+import torch
 
 BASE_DIR = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 SADTALKER_DIR = os.path.join(BASE_DIR, "SadTalker")
@@ -44,11 +46,28 @@ def animate_face(photo_path: str, audio_path: str, output_dir: str,
     if not os.path.exists(audio_path):
         raise FileNotFoundError(f"Audio not found: {audio_path}")
 
-    if is_sadtalker_installed():
-        print("[FaceAnimator] SadTalker detected — generating lip-sync animation (may take 5-15 min on CPU)")
-        return _run_sadtalker(photo_path, audio_path, output_dir, video_type)
+    use_gpu = torch.cuda.is_available()
 
-    print("[FaceAnimator] SadTalker not ready — using Ken Burns zoom effect")
+    # SadTalker only on GPU — on CPU it takes 30+ min per video (not viable)
+    if use_gpu and is_sadtalker_installed():
+        print("[FaceAnimator] GPU + SadTalker — generating full lip-sync")
+        result = _run_sadtalker(photo_path, audio_path, output_dir, video_type)
+        if result:
+            return result
+
+    # MediaPipe talking-head: mouth movement, ~10-30s on CPU
+    print("[FaceAnimator] Using MediaPipe talking-head animation")
+    W, H = RESOLUTIONS.get(video_type, (720, 1280))
+    talk_output = os.path.join(output_dir, "face_talking.mp4")
+    try:
+        from backend.services.talking_head import create_talking_video
+        if create_talking_video(photo_path, audio_path, talk_output, W, H):
+            print("[FaceAnimator] MediaPipe talking-head complete")
+            return talk_output
+    except Exception as e:
+        print(f"[FaceAnimator] MediaPipe failed ({e}), using Ken Burns")
+
+    print("[FaceAnimator] Falling back to Ken Burns zoom")
     return _ken_burns_ffmpeg(photo_path, audio_path, output_dir, video_type)
 
 
@@ -136,8 +155,7 @@ def _get_audio_duration(audio_path: str) -> float:
 
 def _run_sadtalker(photo_path: str, audio_path: str, output_dir: str,
                    video_type: str = "short") -> str:
-    """Use SadTalker for realistic lip-sync."""
-    import torch
+    """Use SadTalker for realistic lip-sync (GPU only)."""
     use_gpu = torch.cuda.is_available()
 
     # CPU mode: 256px + crop is 3-4x faster than 512 + full
