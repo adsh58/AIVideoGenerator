@@ -1,7 +1,8 @@
 """
 TTS Service
-- Default: edge-tts (Microsoft, free, high quality, no cloning, needs internet)
-- Upgrade: Coqui XTTS-v2 (voice cloning, set USE_VOICE_CLONE=true in .env)
+- Default: edge-tts (Microsoft, free, high-quality voices, needs internet)
+- Auto-detects Hinglish prompts → uses Indian English/Hindi voice
+- Voice clone: set USE_VOICE_CLONE=true + install Coqui TTS
 """
 import os
 import asyncio
@@ -12,64 +13,90 @@ import imageio_ffmpeg
 FFMPEG = imageio_ffmpeg.get_ffmpeg_exe()
 USE_VOICE_CLONE = os.getenv("USE_VOICE_CLONE", "false").lower() == "true"
 
+# Voice map by language
+_VOICES = {
+    "en": os.getenv("EDGE_TTS_VOICE", "en-US-AndrewMultilingualNeural"),
+    "hi": "hi-IN-MadhurNeural",        # Indian Hindi male, natural
+    "hi_f": "hi-IN-SwaraNeural",       # Indian Hindi female
+    "en_in": "en-IN-PrabhatNeural",    # Indian English male
+}
+
+_HINGLISH_KEYWORDS = {
+    "hinglish", "hindi", "indian", "hindi english",
+    "hindi mein", "hindi me", "hindi mai", "bolna", "bolo",
+}
+
 _coqui_model = None
 
 
-def generate_speech(script: str, voice_sample_path: str, output_path: str) -> str:
+def _detect_language(script_prompt: str) -> str:
+    """Return voice key based on language hint in prompt."""
+    p = (script_prompt or "").lower()
+    if any(k in p for k in _HINGLISH_KEYWORDS):
+        return "en_in"  # Indian English voice reads Hinglish well
+    return "en"
+
+
+def generate_speech(script: str, voice_sample_path: str, output_path: str,
+                    script_prompt: str = "") -> str:
     """Synchronous entry point — safe to call from thread pool executor."""
-    os.makedirs(os.path.dirname(output_path), exist_ok=True)
+    os.makedirs(os.path.dirname(os.path.abspath(output_path)), exist_ok=True)
 
     if not script or not script.strip():
         raise ValueError("Script is empty — cannot generate audio")
 
-    if USE_VOICE_CLONE:
-        return _coqui_generate(script, voice_sample_path, output_path)
-    else:
-        return _edge_tts_generate(script, output_path)
+    if USE_VOICE_CLONE and voice_sample_path and os.path.exists(voice_sample_path):
+        try:
+            return _coqui_generate(script, voice_sample_path, output_path)
+        except Exception as e:
+            print(f"[TTS] Voice clone failed ({e}), falling back to edge-tts")
+
+    return _edge_tts_generate(script, output_path, script_prompt)
 
 
 # ── edge-tts ─────────────────────────────────────────────────────────────────
 
-def _edge_tts_generate(script: str, output_path: str) -> str:
-    """Run edge-tts in its own event loop (safe from thread pool)."""
-    voice = os.getenv("EDGE_TTS_VOICE", "en-US-AndrewMultilingualNeural")
+def _edge_tts_generate(script: str, output_path: str, script_prompt: str = "") -> str:
+    lang = _detect_language(script_prompt)
+    voice = _VOICES.get(lang, _VOICES["en"])
 
-    # Create a fresh event loop — safe because this runs in a thread, not the main loop
+    mp3_path = os.path.splitext(output_path)[0] + ".mp3"
+
     loop = asyncio.new_event_loop()
     try:
-        loop.run_until_complete(_edge_tts_async(script, voice, output_path))
+        loop.run_until_complete(_edge_tts_async(script, voice, mp3_path))
     finally:
         loop.close()
 
-    # edge-tts outputs mp3 directly; convert to wav so ffmpeg downstream is consistent
-    if output_path.endswith(".mp3"):
-        return output_path  # already correct format
+    if not os.path.exists(mp3_path) or os.path.getsize(mp3_path) < 100:
+        raise RuntimeError(f"edge-tts produced no output (voice={voice})")
 
-    mp3_path = os.path.splitext(output_path)[0] + ".mp3"
-    if os.path.exists(mp3_path):
-        _ffmpeg_convert(mp3_path, output_path)
+    # Always convert to wav for consistent downstream handling
+    _ffmpeg_convert(mp3_path, output_path)
+    try:
         os.remove(mp3_path)
-    elif not os.path.exists(output_path):
-        raise RuntimeError("edge-tts produced no output file")
+    except Exception:
+        pass
+
+    if not os.path.exists(output_path) or os.path.getsize(output_path) < 100:
+        raise RuntimeError("Audio conversion produced empty file")
 
     return output_path
 
 
-async def _edge_tts_async(script: str, voice: str, output_path: str):
+async def _edge_tts_async(script: str, voice: str, mp3_path: str):
     import edge_tts
-    mp3_path = os.path.splitext(output_path)[0] + ".mp3"
     communicate = edge_tts.Communicate(script, voice)
     await communicate.save(mp3_path)
 
 
 def _ffmpeg_convert(src: str, dst: str):
-    """Convert audio format using bundled ffmpeg."""
     result = subprocess.run(
-        [FFMPEG, "-y", "-i", src, dst],
+        [FFMPEG, "-y", "-i", src, "-ar", "22050", "-ac", "1", dst],
         capture_output=True, timeout=60
     )
     if result.returncode != 0:
-        # Fallback: just copy — ffmpeg downstream can handle mp3 as wav input
+        # Last resort: raw copy (ffmpeg may still handle it)
         import shutil
         shutil.copy2(src, dst)
 

@@ -148,7 +148,7 @@ def _build_subtitle_filter(srt_path: str) -> str:
         # Escape colon after drive letter (e.g. C: -> C\:)
         if len(safe) > 1 and safe[1] == ":":
             safe = safe[0] + "\\:" + safe[2:]
-        style = "FontName=Arial,FontSize=20,PrimaryColour=&H00FFFFFF,OutlineColour=&H00000000,Outline=2,Bold=1,Alignment=2"
+        style = "FontName=Arial,FontSize=26,PrimaryColour=&H00FFFFFF,OutlineColour=&H00000000,Outline=3,Shadow=1,Bold=1,Alignment=2,MarginV=30"
         return f",subtitles='{safe}':force_style='{style}'"
     except Exception as e:
         print(f"[Composer] Subtitle filter skipped: {e}")
@@ -192,49 +192,67 @@ def _get_video_duration(video_path: str) -> float:
 
 
 def _generate_background(prompt: str, width: int, height: int) -> Image.Image:
-    p = prompt.lower()
-    if any(w in p for w in ["cozy", "warm", "chair", "light", "candle", "studio"]):
-        colors = [(40, 20, 10), (90, 55, 30), (140, 90, 50)]
-    elif any(w in p for w in ["night", "dark", "moody", "dramatic"]):
-        colors = [(5, 5, 20), (20, 15, 45), (40, 30, 80)]
-    elif any(w in p for w in ["nature", "outdoor", "forest", "green"]):
-        colors = [(10, 40, 20), (30, 80, 50), (60, 120, 80)]
-    elif any(w in p for w in ["tech", "digital", "modern", "blue"]):
-        colors = [(5, 10, 30), (15, 30, 70), (30, 60, 130)]
-    elif any(w in p for w in ["bright", "light", "clean", "white"]):
-        colors = [(200, 200, 210), (230, 230, 240), (245, 245, 255)]
-    else:
-        colors = [(15, 20, 35), (30, 40, 70), (50, 65, 110)]
-
-    img = Image.new("RGB", (width, height))
-    draw = ImageDraw.Draw(img)
-    for y in range(height):
-        ratio = y / height
-        c0, c1 = (colors[0], colors[1]) if ratio < 0.5 else (colors[1], colors[2])
-        t = (ratio * 2) if ratio < 0.5 else ((ratio - 0.5) * 2)
-        draw.line([(0, y), (width, y)], fill=(
-            int(c0[0] + (c1[0] - c0[0]) * t),
-            int(c0[1] + (c1[1] - c0[1]) * t),
-            int(c0[2] + (c1[2] - c0[2]) * t),
-        ))
-
-    img = _add_bokeh(img, colors)
-    return img.filter(ImageFilter.GaussianBlur(radius=4))
-
-
-def _add_bokeh(img: Image.Image, colors: list) -> Image.Image:
     import random
+    import math
+    p = prompt.lower()
+
+    # Theme → (dark base, mid, accent, bokeh_color)
+    if any(w in p for w in ["cozy", "warm", "chair", "light", "candle", "studio"]):
+        dark, mid, light = (35, 18, 8), (85, 48, 22), (160, 95, 45)
+        accent = (220, 140, 60)
+    elif any(w in p for w in ["night", "dark", "moody", "dramatic", "cinematic"]):
+        dark, mid, light = (4, 4, 18), (18, 12, 42), (38, 28, 78)
+        accent = (120, 80, 200)
+    elif any(w in p for w in ["nature", "outdoor", "forest", "green"]):
+        dark, mid, light = (8, 32, 16), (22, 68, 42), (50, 110, 72)
+        accent = (80, 200, 120)
+    elif any(w in p for w in ["tech", "digital", "modern", "blue", "office"]):
+        dark, mid, light = (4, 8, 26), (12, 26, 65), (25, 55, 125)
+        accent = (60, 140, 255)
+    elif any(w in p for w in ["bright", "light", "clean", "white", "minimal"]):
+        dark, mid, light = (190, 190, 205), (215, 215, 230), (240, 240, 255)
+        accent = (150, 130, 220)
+    elif any(w in p for w in ["sunset", "orange", "golden", "warm"]):
+        dark, mid, light = (60, 20, 10), (140, 60, 20), (220, 120, 40)
+        accent = (255, 180, 80)
+    else:
+        dark, mid, light = (12, 16, 30), (25, 38, 68), (45, 60, 105)
+        accent = (100, 120, 220)
+
+    # Radial gradient base
+    img = Image.new("RGB", (width, height))
+    pixels = img.load()
+    cx, cy = width // 2, height // 2
+    max_dist = math.sqrt(cx**2 + cy**2)
+    for y in range(height):
+        for x in range(width):
+            dist = math.sqrt((x - cx)**2 + (y - cy)**2) / max_dist
+            vert = y / height
+            # blend vertical gradient with radial vignette
+            t_vert = vert
+            t_rad = min(dist * 1.2, 1.0)
+            # vertical gradient component
+            if t_vert < 0.5:
+                cv = tuple(int(dark[i] + (mid[i] - dark[i]) * t_vert * 2) for i in range(3))
+            else:
+                cv = tuple(int(mid[i] + (light[i] - mid[i]) * (t_vert - 0.5) * 2) for i in range(3))
+            # darken edges (vignette)
+            vig = max(0.0, 1.0 - t_rad * 0.6)
+            pixels[x, y] = tuple(int(cv[i] * vig) for i in range(3))
+
+    # Bokeh circles
     overlay = Image.new("RGBA", img.size, (0, 0, 0, 0))
     draw = ImageDraw.Draw(overlay)
-    random.seed(42)
-    base = colors[-1]
-    for _ in range(25):
-        x = random.randint(0, img.width)
-        y = random.randint(0, img.height)
-        r = random.randint(40, 180)
-        a = random.randint(10, 35)
-        draw.ellipse(
-            [x - r, y - r, x + r, y + r],
-            fill=(min(255, base[0] + 80), min(255, base[1] + 60), min(255, base[2] + 40), a)
-        )
-    return Image.alpha_composite(img.convert("RGBA"), overlay).convert("RGB")
+    rng = random.Random(hash(prompt) % 2**32)
+    for _ in range(35):
+        x = rng.randint(-50, width + 50)
+        y = rng.randint(-50, height + 50)
+        r = rng.randint(30, 200)
+        a = rng.randint(8, 45)
+        brightness = rng.uniform(0.6, 1.4)
+        color = tuple(min(255, int(accent[i] * brightness)) for i in range(3)) + (a,)
+        draw.ellipse([x - r, y - r, x + r, y + r], fill=color)
+
+    result = Image.alpha_composite(img.convert("RGBA"), overlay).convert("RGB")
+    # Gentle blur for soft bokeh look
+    return result.filter(ImageFilter.GaussianBlur(radius=5))

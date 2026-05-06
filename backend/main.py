@@ -40,5 +40,5 @@ def read_root():
 @app.on_event("startup")
 def startup_event():
     init_db()
-    print("✅ Database initialized")
-    print("🚀 AI Video Generator running at http://localhost:8000")
+    print("[OK] Database initialized")
+    print("[*] AI Video Generator running at http://localhost:8000")

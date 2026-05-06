@@ -22,11 +22,16 @@ RESOLUTIONS = {
 
 
 def is_sadtalker_installed() -> bool:
-    return (
-        os.path.isdir(SADTALKER_DIR)
-        and os.path.isfile(os.path.join(SADTALKER_DIR, "inference.py"))
-        and os.path.isdir(os.path.join(SADTALKER_DIR, "checkpoints"))
-    )
+    if not os.path.isdir(SADTALKER_DIR):
+        return False
+    if not os.path.isfile(os.path.join(SADTALKER_DIR, "inference.py")):
+        return False
+    ckpt_dir = os.path.join(SADTALKER_DIR, "checkpoints")
+    if not os.path.isdir(ckpt_dir):
+        return False
+    # Need at least the main safetensors model
+    safetensors = [f for f in os.listdir(ckpt_dir) if f.endswith(".safetensors") and os.path.getsize(os.path.join(ckpt_dir, f)) > 1_000_000]
+    return len(safetensors) > 0
 
 
 def animate_face(photo_path: str, audio_path: str, output_dir: str,
@@ -40,8 +45,10 @@ def animate_face(photo_path: str, audio_path: str, output_dir: str,
         raise FileNotFoundError(f"Audio not found: {audio_path}")
 
     if is_sadtalker_installed():
-        return _run_sadtalker(photo_path, audio_path, output_dir)
+        print("[FaceAnimator] SadTalker detected — generating lip-sync animation (may take 5-15 min on CPU)")
+        return _run_sadtalker(photo_path, audio_path, output_dir, video_type)
 
+    print("[FaceAnimator] SadTalker not ready — using Ken Burns zoom effect")
     return _ken_burns_ffmpeg(photo_path, audio_path, output_dir, video_type)
 
 
@@ -127,25 +134,43 @@ def _get_audio_duration(audio_path: str) -> float:
     return 60.0
 
 
-def _run_sadtalker(photo_path: str, audio_path: str, output_dir: str) -> str:
-    """Use SadTalker for realistic lip-sync if installed."""
+def _run_sadtalker(photo_path: str, audio_path: str, output_dir: str,
+                   video_type: str = "short") -> str:
+    """Use SadTalker for realistic lip-sync."""
+    import torch
+    use_gpu = torch.cuda.is_available()
+
+    # CPU mode: 256px + crop is 3-4x faster than 512 + full
+    size = "512" if use_gpu else "256"
+    preprocess = "full" if use_gpu else "crop"
+
     cmd = [
         sys.executable,
         os.path.join(SADTALKER_DIR, "inference.py"),
         "--driven_audio", audio_path,
         "--source_image", photo_path,
         "--result_dir", output_dir,
-        "--still", "--preprocess", "full",
+        "--still",
+        "--preprocess", preprocess,
+        "--size", size,
     ]
     env = os.environ.copy()
     env["PYTHONPATH"] = SADTALKER_DIR
+    print(f"[SadTalker] Running on {'GPU' if use_gpu else 'CPU'} (size={size}, preprocess={preprocess})")
+
     result = subprocess.run(
         cmd, capture_output=True, text=True,
-        cwd=SADTALKER_DIR, env=env, timeout=600
+        cwd=SADTALKER_DIR, env=env, timeout=1800
     )
+
     if result.returncode == 0:
-        for fname in os.listdir(output_dir):
-            if fname.endswith(".mp4"):
-                return os.path.join(output_dir, fname)
-    print(f"[SadTalker] Failed, using Ken Burns fallback: {result.stderr[-200:]}")
-    return _ken_burns_ffmpeg(photo_path, audio_path, output_dir)
+        # SadTalker may output to a subdirectory — search recursively
+        for root, _, files in os.walk(output_dir):
+            for fname in files:
+                if fname.endswith(".mp4"):
+                    return os.path.join(root, fname)
+
+    print(f"[SadTalker] returncode={result.returncode}")
+    print(f"[SadTalker] stderr: {result.stderr[-500:]}")
+    print("[SadTalker] Falling back to Ken Burns")
+    return _ken_burns_ffmpeg(photo_path, audio_path, output_dir, video_type)

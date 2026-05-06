@@ -123,10 +123,7 @@ async function previewScript() {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
-        photo_path: state.photoPath || '',
-        voice_path: state.voicePath || '',
         script_prompt: prompt,
-        background_prompt: '',
         video_type: state.videoType,
         video_length: parseInt(document.getElementById('durationSlider').value),
       }),
@@ -199,17 +196,17 @@ async function generateVideo() {
 
 function startPolling(jobId) {
   if (state.pollInterval) clearInterval(state.pollInterval);
-  state.pollInterval = setInterval(() => pollJob(jobId), 3000);
+  state.pollInterval = setInterval(() => pollJob(jobId), 5000);
 }
 
 const STATUS_LABELS = {
-  pending: { label: 'Queued...', step: 'Waiting to start', pct: 5 },
-  generating_script: { label: 'Writing your script', step: 'AI is crafting the perfect script', pct: 20 },
-  generating_audio: { label: 'Cloning your voice', step: 'XTTS-v2 is synthesizing speech', pct: 45 },
-  animating_face: { label: 'Animating your face', step: 'SadTalker is lip-syncing your photo', pct: 70 },
-  composing_video: { label: 'Composing final video', step: 'Adding background, captions & effects', pct: 88 },
-  completed: { label: 'Done!', step: 'Your video is ready', pct: 100 },
-  failed: { label: 'Generation failed', step: 'Check error below', pct: 0 },
+  pending:           { label: 'Queued...',               step: 'Waiting to start', pct: 5 },
+  generating_script: { label: 'Writing your script',     step: 'AI is crafting the perfect script for your topic', pct: 20 },
+  generating_audio:  { label: 'Generating speech',       step: 'Converting script to natural-sounding audio', pct: 45 },
+  animating_face:    { label: 'Animating your face',     step: 'SadTalker is generating lip-sync (may take 5-15 min on CPU)', pct: 70 },
+  composing_video:   { label: 'Composing final video',   step: 'Merging face, background & captions', pct: 88 },
+  completed:         { label: 'Done!',                   step: 'Your video is ready to download', pct: 100 },
+  failed:            { label: 'Generation failed',       step: 'See error below', pct: 0 },
 };
 
 async function pollJob(jobId) {

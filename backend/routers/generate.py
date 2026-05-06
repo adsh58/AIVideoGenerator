@@ -79,7 +79,7 @@ async def run_pipeline(job_id: int):
         _update_job(db, job_id, status="generating_audio", progress=30)
         audio_path = os.path.join(out_dir, "speech.wav")
         await loop.run_in_executor(
-            None, tts_service.generate_speech, script, job.voice_path, audio_path
+            None, tts_service.generate_speech, script, job.voice_path, audio_path, job.script_prompt
         )
         if not os.path.exists(audio_path) or os.path.getsize(audio_path) < 1000:
             raise ValueError("Audio generation failed or produced empty file")
@@ -89,7 +89,7 @@ async def run_pipeline(job_id: int):
         _update_job(db, job_id, status="animating_face", progress=60)
         face_dir = os.path.join(out_dir, "face")
         face_video = await loop.run_in_executor(
-            None, face_animator.animate_face, job.photo_path, audio_path, face_dir
+            None, face_animator.animate_face, job.photo_path, audio_path, face_dir, job.video_type
         )
         if not os.path.exists(face_video) or os.path.getsize(face_video) < 1000:
             raise ValueError("Face animation failed or produced empty file")
